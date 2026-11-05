@@ -1,0 +1,54 @@
+name: Vinted watcher
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"     # start a run every 5 minutes
+  workflow_dispatch:           # lets you press "Run workflow" by hand
+    inputs:
+      test:
+        description: "Send a test notification only"
+        type: boolean
+        default: false
+
+concurrency:
+  group: vinted-watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install curl_cffi requests
+
+      - name: Restore list of already-seen items
+        uses: actions/cache/restore@v4
+        with:
+          path: seen.json
+          key: seen-${{ github.run_id }}
+          restore-keys: seen-
+
+      - name: Test notification
+        if: ${{ inputs.test }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python vinted_watch.py --test
+
+      - name: Watch Vinted for ~4.5 minutes
+        if: ${{ !inputs.test }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python vinted_watch.py --minutes 4.5
+
+      - name: Save list of seen items
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: seen.json
+          key: seen-${{ github.run_id }}

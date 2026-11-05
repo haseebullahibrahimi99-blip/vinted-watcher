@@ -1,0 +1,30 @@
+{
+  "domain": "www.vinted.co.uk",
+  "poll_seconds": 60,
+  "per_page": 48,
+  "max_age_minutes": 30,
+  "notify_on_start": false,
+
+  "ntfy_topic": "",
+
+  "telegram": {
+    "bot_token": "",
+    "chat_id": ""
+  },
+
+  "exclude_words": ["case", "cover", "charger", "cable", "screen protector",
+                    "tempered glass", "box only", "empty box", "skin", "sticker",
+                    "stand", "holder", "earphones", "airpods", "pencil only",
+                    "keyboard", "dummy", "replica", "toy"],
+
+  "searches": [
+    {
+      "name": "iPhone",
+      "url": "https://www.vinted.co.uk/catalog?search_text=iphone&order=newest_first"
+    },
+    {
+      "name": "iPad",
+      "url": "https://www.vinted.co.uk/catalog?search_text=ipad&order=newest_first"
+    }
+  ]
+}
