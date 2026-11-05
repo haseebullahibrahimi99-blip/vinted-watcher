@@ -9,6 +9,7 @@ Usage:
 import json
 import os
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -63,37 +64,209 @@ def url_to_params(search_url):
 
 # ---------- Vinted client ----------
 
+API_HOST = DOMAIN.replace("www.", "api.", 1)   # www.vinted.co.uk -> api.vinted.co.uk
+
+# Old filter names -> names used by Vinted's new (Sept 2026) catalogue API
+ATTR_MAP = {"catalog_ids": "catalog", "status_ids": "status", "brand_ids": "brand",
+            "size_ids": "size", "color_ids": "color", "material_ids": "material"}
+
+
+def to_new_params(params):
+    out = {}
+    for k, v in params.items():
+        if v in (None, ""):
+            continue                      # the new API rejects empty filters
+        out[f"attribute_ids[{ATTR_MAP[k]}]" if k in ATTR_MAP else k] = v
+    return out
+
+
+def find_item_list(data):
+    """Find the list of listings inside any JSON shape."""
+    if isinstance(data, list):
+        if data and all(isinstance(x, dict) for x in data) and \
+                any(("id" in x or "item_id" in x) for x in data):
+            return data
+        for x in data:
+            found = find_item_list(x)
+            if found:
+                return found
+    elif isinstance(data, dict):
+        for key in ("items", "data", "results", "catalog_items"):
+            if key in data:
+                found = find_item_list(data[key])
+                if found:
+                    return found
+        for v in data.values():
+            if isinstance(v, (list, dict)):
+                found = find_item_list(v)
+                if found:
+                    return found
+    return None
+
+
+def absolute(url):
+    if not url:
+        return None
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("/"):
+        return f"https://{DOMAIN}{url}"
+    return url
+
+
+def normalize(i):
+    """Turn a listing from any Vinted format into one standard shape."""
+    box = i.get("item_box") or {}
+    photo = i.get("photo")
+    if not isinstance(photo, dict):
+        photos = i.get("photos") or []
+        photo = photos[0] if photos and isinstance(photos[0], dict) else {}
+    img = photo.get("url") or i.get("image") or i.get("thumbnail") or i.get("image_url")
+    if isinstance(img, list):
+        img = img[0] if img else None
+    if isinstance(img, dict):
+        img = img.get("url")
+    item_id = i.get("id") or i.get("item_id")
+    title = i.get("title") or i.get("name") or box.get("first_line") or "(no title)"
+    return {
+        "id": str(item_id),
+        "title": title,
+        "price": i.get("price") or i.get("total_item_price"),
+        "currency": i.get("currency"),
+        "url": absolute(i.get("url") or i.get("path")) or f"https://{DOMAIN}/items/{item_id}",
+        "photo": {"url": absolute(img), "high_resolution": photo.get("high_resolution")},
+        "brand_title": i.get("brand_title") or (box.get("first_line") if box.get("first_line") != title else None),
+        "size_title": i.get("size_title") or box.get("second_line"),
+        "status": i.get("status") if isinstance(i.get("status"), str) else None,
+    }
+
+
+def parse_ld_json(html):
+    """Backup method: read listings embedded in the normal catalogue web page."""
+    items = []
+    for block in re.findall(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', html, re.S):
+        try:
+            data = json.loads(block)
+        except Exception:
+            continue
+        stack = [data]
+        while stack:
+            d = stack.pop()
+            if isinstance(d, list):
+                stack.extend(d)
+                continue
+            if not isinstance(d, dict):
+                continue
+            if d.get("@type") == "ItemList":
+                for el in d.get("itemListElement", []):
+                    prod = el.get("item", el) if isinstance(el, dict) else {}
+                    url = prod.get("url") or el.get("url", "")
+                    m = re.search(r"/items/(\d+)", url or "")
+                    if not m:
+                        continue
+                    offers = prod.get("offers") or {}
+                    if isinstance(offers, list):
+                        offers = offers[0] if offers else {}
+                    items.append(normalize({
+                        "id": m.group(1), "title": prod.get("name"), "url": url,
+                        "image": prod.get("image"),
+                        "price": offers.get("price"), "currency": offers.get("priceCurrency"),
+                    }))
+            else:
+                stack.extend(v for v in d.values() if isinstance(v, (list, dict)))
+    return items
+
+
 class Vinted:
     def __init__(self):
+        self.method_logged = False
         self.new_session()
 
     def new_session(self):
         self.s = http.Session(**SESSION_KW)
         if not SESSION_KW:  # plain requests: pretend to be a browser
             self.s.headers["User-Agent"] = UA
-        self.s.headers.update({
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-GB,en;q=0.9",
-        })
-        # Visiting the homepage gives us the anonymous cookies the API needs
+        self.s.headers.update({"Accept-Language": "en-GB,en;q=0.9"})
+        # Visiting the homepage gives us the anonymous token the API needs
         r = self.s.get(f"https://{DOMAIN}/", timeout=20)
-        log(f"New Vinted session (status {r.status_code})")
+        self.token = self.cookie("access_token_web")
+        self.anon = r.headers.get("x-anon-id") or self.cookie("anon_id")
+        m = re.search(r'"CSRF_TOKEN\\?"\s*:\s*\\?"([^"\\]+)', r.text or "") or \
+            re.search(r'name="csrf-token"\s+content="([^"]+)"', r.text or "")
+        self.csrf = m.group(1) if m else None
+        log(f"New Vinted session (status {r.status_code}, token {'yes' if self.token else 'no'})")
+
+    def cookie(self, name):
+        try:
+            for c in self.s.cookies.jar:
+                if c.name == name:
+                    return c.value
+        except Exception:
+            pass
+        try:
+            return self.s.cookies.get(name)
+        except Exception:
+            return None
+
+    def api_headers(self):
+        h = {"Accept": "application/json, text/plain, */*",
+             "Origin": f"https://{DOMAIN}", "Referer": f"https://{DOMAIN}/catalog"}
+        if self.token:
+            h["Authorization"] = f"Bearer {self.token}"
+        if self.anon:
+            h["X-Anon-Id"] = self.anon
+        if self.csrf:
+            h["X-Csrf-Token"] = self.csrf
+        return h
+
+    def used(self, how):
+        if not self.method_logged:
+            log(f"Getting listings via: {how}")
+            self.method_logged = True
 
     def search(self, params):
-        for _ in range(2):
-            r = self.s.get(f"https://{DOMAIN}/api/v2/catalog/items",
-                           params=params, timeout=20)
+        # 1) New catalogue API (Sept 2026)
+        for _ in range(3):
+            r = self.s.get(f"https://{API_HOST}/svc-catalogue/items",
+                           params=to_new_params(params), headers=self.api_headers(), timeout=20)
             if r.status_code == 200:
-                return r.json().get("items", [])
+                items = find_item_list(r.json())
+                if items is not None:
+                    self.used("new API")
+                    return [normalize(i) for i in items]
+                log(f"New API answered but no items found. Keys: {list(r.json())[:10]}")
+                break
             if r.status_code in (401, 403):
-                log(f"Got {r.status_code}, refreshing session")
+                log(f"New API {r.status_code}, refreshing session")
                 time.sleep(5)
                 self.new_session()
                 continue
             if r.status_code == 429:
                 raise RateLimited()
-            r.raise_for_status()
-        return []
+            log(f"New API {r.status_code}: {r.text[:200]!r}")
+            break
+
+        # 2) Old API (in case it comes back)
+        r = self.s.get(f"https://{DOMAIN}/api/v2/catalog/items", params=params,
+                       headers=self.api_headers(), timeout=20)
+        if r.status_code == 200:
+            self.used("old API")
+            return [normalize(i) for i in r.json().get("items", [])]
+        if r.status_code == 429:
+            raise RateLimited()
+
+        # 3) Normal catalogue web page
+        page_params = {k: v for k, v in params.items()
+                       if k in ("search_text", "order", "price_from", "price_to", "currency")}
+        r = self.s.get(f"https://{DOMAIN}/catalog", params=page_params,
+                       headers={"Accept": "text/html"}, timeout=20)
+        if r.status_code == 429:
+            raise RateLimited()
+        items = parse_ld_json(r.text) if r.status_code == 200 else []
+        if items:
+            self.used("catalogue web page")
+            return items
+        raise RuntimeError(f"all methods failed (web page status {r.status_code})")
 
 
 # ---------- item helpers ----------
@@ -101,10 +274,14 @@ class Vinted:
 def price_of(item):
     p = item.get("price")
     if isinstance(p, dict):
-        amount, cur = p.get("amount"), p.get("currency_code", "")
+        amount = p.get("amount") or p.get("value")
+        cur = p.get("currency_code") or p.get("currency") or ""
     else:
-        amount, cur = p, item.get("currency", "")
-    return f"{amount} {cur}".strip()
+        amount, cur = p, item.get("currency") or ""
+    if amount is None:
+        return "price n/a"
+    cur = {"GBP": "£", "EUR": "€"}.get(cur, cur)
+    return f"{cur}{amount}" if cur in ("£", "€") else f"{amount} {cur}".strip()
 
 
 def age_minutes(item):
@@ -192,6 +369,7 @@ def main():
         end_time = time.time() + float(sys.argv[sys.argv.index("--minutes") + 1]) * 60
 
     seen = load_seen()
+    save_seen(seen)  # make sure the file always exists (so GitHub can save it)
     # First ever run only records existing items. If we already have history
     # (e.g. restored on GitHub), alert straight away.
     primed = {n for n, _, _ in searches} if seen else set()
