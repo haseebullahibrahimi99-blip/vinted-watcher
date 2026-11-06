@@ -1,23 +1,30 @@
 name: Vinted watcher
 
+# Press "Run workflow" once: it watches for ~24 hours (4 back-to-back runs of
+# ~6 hours, GitHub's per-run maximum), then stops and sends a phone alert
+# reminding you to start it again.
 on:
-  schedule:
-    - cron: "17 * * * *"      # backup: restarts the chain if it ever breaks
-  workflow_dispatch:           # "Run workflow" button (and how each run starts the next)
+  workflow_dispatch:
     inputs:
       test:
         description: "Send a test notification only"
         type: boolean
         default: false
+      round:
+        description: "Leave as 1 (counts the 6-hour blocks automatically)"
+        type: string
+        default: "1"
 
-# Only one watcher at a time; an extra start just waits its turn.
 concurrency:
   group: vinted-watcher
   cancel-in-progress: false
 
 permissions:
   contents: read
-  actions: write               # lets a run start the next run
+  actions: write               # lets a run start the next block
+
+env:
+  TOTAL_ROUNDS: 4              # 4 x ~6 hours = ~24 hours
 
 jobs:
   watch:
@@ -45,11 +52,11 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python vinted_watch.py --test
 
-      - name: Watch Vinted for ~5h45m
+      - name: Watch Vinted (block ${{ inputs.round }} of 4, ~6 hours)
         if: ${{ !inputs.test }}
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python vinted_watch.py --minutes 345
+        run: python vinted_watch.py --minutes 352
 
       - name: Save list of seen items
         if: always()
@@ -58,8 +65,33 @@ jobs:
           path: seen.json
           key: seen-${{ github.run_id }}
 
-      - name: Start the next run
-        if: ${{ always() && !inputs.test }}
+      - name: Start the next block, or tell you the 24 hours are up
+        if: ${{ !cancelled() && !inputs.test }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run watch.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          ROUND: ${{ inputs.round }}
+          ACTIONS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/watch.yml
+        run: |
+          ROUND=${ROUND:-1}
+          if [ "$ROUND" -lt "$TOTAL_ROUNDS" ]; then
+            gh workflow run watch.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f round=$((ROUND + 1))
+            echo "Started block $((ROUND + 1)) of $TOTAL_ROUNDS"
+          else
+            curl -sS -H "Title: Vinted watcher stopped" -H "Priority: 5" -H "Tags: alarm_clock" \
+                 -H "Click: $ACTIONS_URL" \
+                 -d "24 hours are up. Tap here, then press 'Run workflow' to start another 24 hours." \
+                 "https://ntfy.sh/$NTFY_TOPIC"
+            echo "24 hours done - reminder sent"
+          fi
+
+      - name: Tell you if the watcher crashed
+        if: ${{ failure() && !inputs.test }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -sS -H "Title: Vinted watcher stopped with an error" -H "Priority: 5" -H "Tags: warning" \
+               -H "Click: $RUN_URL" \
+               -d "Tap to see what happened, then press 'Re-run all jobs' or send Claude a screenshot." \
+               "https://ntfy.sh/$NTFY_TOPIC"
