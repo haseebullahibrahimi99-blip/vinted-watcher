@@ -7,4 +7,4 @@ if not exist watcher.log (
   pause
   exit /b
 )
-powershell -NoProfile -Command "Get-Content -Path (Join-Path (Get-Location) "watcher.log") -Tail 40 -Wait -Encoding UTF8"
+powershell -NoProfile -Command "Get-Content -Path 'watcher.log' -Tail 40 -Wait -Encoding UTF8"
