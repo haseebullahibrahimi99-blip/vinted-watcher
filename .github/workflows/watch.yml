@@ -2,22 +2,27 @@ name: Vinted watcher
 
 on:
   schedule:
-    - cron: "*/5 * * * *"     # start a run every 5 minutes
-  workflow_dispatch:           # lets you press "Run workflow" by hand
+    - cron: "17 * * * *"      # backup: restarts the chain if it ever breaks
+  workflow_dispatch:           # "Run workflow" button (and how each run starts the next)
     inputs:
       test:
         description: "Send a test notification only"
         type: boolean
         default: false
 
+# Only one watcher at a time; an extra start just waits its turn.
 concurrency:
   group: vinted-watcher
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write               # lets a run start the next run
+
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 358       # GitHub's maximum is 360
     steps:
       - uses: actions/checkout@v4
 
@@ -40,11 +45,11 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python vinted_watch.py --test
 
-      - name: Watch Vinted for ~25 minutes
+      - name: Watch Vinted for ~5h45m
         if: ${{ !inputs.test }}
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python vinted_watch.py --minutes 25
+        run: python vinted_watch.py --minutes 345
 
       - name: Save list of seen items
         if: always()
@@ -52,3 +57,9 @@ jobs:
         with:
           path: seen.json
           key: seen-${{ github.run_id }}
+
+      - name: Start the next run
+        if: ${{ always() && !inputs.test }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run watch.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"
