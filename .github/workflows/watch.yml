@@ -17,7 +17,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -40,11 +40,11 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python vinted_watch.py --test
 
-      - name: Watch Vinted for ~4.5 minutes
+      - name: Watch Vinted for ~25 minutes
         if: ${{ !inputs.test }}
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python vinted_watch.py --minutes 4.5
+        run: python vinted_watch.py --minutes 25
 
       - name: Save list of seen items
         if: always()
