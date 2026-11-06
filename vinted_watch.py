@@ -332,6 +332,35 @@ def notify(search_name, item):
             log(f"Telegram failed: {e}")
 
 
+# ---------- accessory filter ----------
+
+# "128GB", "256 gb", "1TB" -> almost always a real device, not an accessory
+STORAGE_RE = re.compile(r"\b\d{2,4}\s?(gb|tb)\b", re.I)
+
+
+def amount_of(item):
+    p = item.get("price")
+    if isinstance(p, dict):
+        p = p.get("amount") or p.get("value")
+    try:
+        return float(str(p).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def skip_reason(item, excl, min_price):
+    title = (item.get("title") or "").lower()
+    amount = amount_of(item)
+    if min_price and amount is not None and amount < min_price:
+        return f"under £{min_price:g}"
+    for w in excl:
+        if re.search(r"\b" + re.escape(w) + r"\b", title):
+            if STORAGE_RE.search(title):
+                return None          # e.g. "iPhone 13 128GB + case" -> keep
+            return f"word '{w}'"
+    return None
+
+
 # ---------- seen-items memory ----------
 
 def load_seen():
@@ -362,6 +391,7 @@ def main():
     delay = CONFIG.get("poll_seconds", 60)
     max_age = CONFIG.get("max_age_minutes")
     notify_on_start = CONFIG.get("notify_on_start", False)
+    min_price = float(CONFIG.get("min_price", 0) or 0)
 
     # --minutes N : stop after N minutes (used by the GitHub schedule)
     end_time = None
@@ -396,8 +426,9 @@ def main():
                 seen.add(item["id"])
                 if name not in primed and not notify_on_start:
                     continue
-                title = item.get("title", "").lower()
-                if any(w in title for w in excl):
+                reason = skip_reason(item, excl, min_price)
+                if reason:
+                    log(f"skip ({reason}): {item.get('title')} - {price_of(item)}")
                     continue
                 age = age_minutes(item)
                 if max_age and age is not None and age > max_age:

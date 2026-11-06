@@ -5,6 +5,8 @@
   "max_age_minutes": 30,
   "notify_on_start": false,
 
+  "min_price": 30,
+
   "ntfy_topic": "",
 
   "telegram": {
@@ -12,19 +14,28 @@
     "chat_id": ""
   },
 
-  "exclude_words": ["case", "cover", "charger", "cable", "screen protector",
-                    "tempered glass", "box only", "empty box", "skin", "sticker",
-                    "stand", "holder", "earphones", "airpods", "pencil only",
-                    "keyboard", "dummy", "replica", "toy"],
+  "exclude_words": [
+    "case", "cases", "cover", "covers", "bumper", "shell", "folio", "sleeve",
+    "pouch", "wallet", "flip", "magsafe", "skin", "skins", "sticker", "stickers",
+    "screen protector", "protector", "protectors", "tempered glass", "privacy glass",
+    "camera protector", "lens protector",
+    "power bank", "battery pack", "dock",
+    "stand", "holder", "mount", "tripod", "selfie stick", "grip", "popsocket",
+    "lanyard", "strap", "ring",
+    "earphones", "headphones", "earbuds", "airpods", "earpods",
+    "box only", "empty box", "just the box",
+    "dummy", "replica", "toy", "display model",
+    "stylus", "pencil only", "keyboard only", "keyboard case"
+  ],
 
   "searches": [
     {
       "name": "iPhone",
-      "url": "https://www.vinted.co.uk/catalog?search_text=iphone&order=newest_first"
+      "url": "https://www.vinted.co.uk/catalog?search_text=iphone&price_from=30&currency=GBP&order=newest_first"
     },
     {
       "name": "iPad",
-      "url": "https://www.vinted.co.uk/catalog?search_text=ipad&order=newest_first"
+      "url": "https://www.vinted.co.uk/catalog?search_text=ipad&price_from=30&currency=GBP&order=newest_first"
     }
   ]
 }
