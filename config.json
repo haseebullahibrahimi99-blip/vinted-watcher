@@ -1,15 +1,87 @@
 {
   "domain": "www.vinted.co.uk",
   "poll_seconds": 60,
-  "per_page": 48,
-  "max_age_minutes": 30,
-  "notify_on_start": false,
-  "min_price": 30,
-  "ntfy_topic": "",
-  "telegram": {
-    "bot_token": "",
-    "chat_id": ""
-  },
+  "per_page": 96,
+  "min_seller_reviews": 1,
+  "alert_if_reviews_unknown": true,
+  "usd_to_gbp": 0.77,
+  "models": [
+    {
+      "name": "iPhone 13",
+      "min": 50,
+      "max": 180
+    },
+    {
+      "name": "iPhone 13 Pro",
+      "min": 50,
+      "max": 210
+    },
+    {
+      "name": "iPhone 13 Pro Max",
+      "min": 50,
+      "max": 270
+    },
+    {
+      "name": "iPhone 14",
+      "min": 50,
+      "max": 220
+    },
+    {
+      "name": "iPhone 14 Plus",
+      "min": 50,
+      "max": 300
+    },
+    {
+      "name": "iPhone 14 Pro",
+      "min": 50,
+      "max": 260
+    },
+    {
+      "name": "iPhone 14 Pro Max",
+      "min": 50,
+      "max": 330
+    },
+    {
+      "name": "iPhone 15",
+      "min": 50,
+      "max": 260
+    },
+    {
+      "name": "iPhone 15 Plus",
+      "min": 60,
+      "max": 300
+    },
+    {
+      "name": "iPhone 15 Pro",
+      "min": 50,
+      "max": 340
+    },
+    {
+      "name": "iPhone 15 Pro Max",
+      "min": 50,
+      "max": 450
+    },
+    {
+      "name": "iPhone 16",
+      "min": 50,
+      "max": 400
+    },
+    {
+      "name": "iPhone 16 Plus",
+      "min": 40,
+      "max": 450
+    },
+    {
+      "name": "iPhone 16 Pro",
+      "min": 40,
+      "max": 450
+    },
+    {
+      "name": "iPhone 16 Pro Max",
+      "min": 70,
+      "max": 550
+    }
+  ],
   "exclude_words": [
     "case",
     "cases",
@@ -81,21 +153,11 @@
     "smartwatch",
     "apple watch band"
   ],
-  "searches": [
-    {
-      "name": "iPhone",
-      "url": "https://www.vinted.co.uk/catalog?search_text=iphone&price_from=30&currency=GBP&order=newest_first",
-      "require_words": [
-        "iphone"
-      ]
-    },
-    {
-      "name": "iPad",
-      "url": "https://www.vinted.co.uk/catalog?search_text=ipad&price_from=30&currency=GBP&order=newest_first",
-      "require_words": [
-        "ipad"
-      ]
-    }
-  ],
-  "usd_to_gbp": 0.77
+  "ntfy_topic": "",
+  "telegram": {
+    "bot_token": "",
+    "chat_id": ""
+  },
+  "max_age_minutes": 30,
+  "notify_on_start": false
 }

@@ -138,6 +138,9 @@ def normalize(i):
         "brand_title": i.get("brand_title") or (box.get("first_line") if box.get("first_line") != title else None),
         "size_title": i.get("size_title") or box.get("second_line"),
         "status": i.get("status") if isinstance(i.get("status"), str) else None,
+        "user": i.get("user") if isinstance(i.get("user"), dict)
+                else i.get("seller") if isinstance(i.get("seller"), dict)
+                else {"id": i.get("user_id") or i.get("seller_id")},
     }
 
 
@@ -218,6 +221,57 @@ class Vinted:
         if self.csrf:
             h["X-Csrf-Token"] = self.csrf
         return h
+
+    # ----- seller reviews -----
+    REVIEW_RES = [re.compile(p) for p in (
+        r'\\?"feedback_count\\?"\s*:\s*(\d+)',
+        r'\\?"reviews_count\\?"\s*:\s*(\d+)',
+        r'"reviewCount"\s*:\s*"?(\d+)',
+    )]
+
+    def seller_reviews(self, item):
+        """Number of reviews the seller has, or None if it can't be found."""
+        u = item.get("user") or {}
+        for k in ("feedback_count", "reviews_count"):
+            if isinstance(u.get(k), int):
+                return u[k]
+        uid = u.get("id")
+        cache = self.__dict__.setdefault("review_cache", {})
+        key = uid or f"item{item['id']}"
+        if key in cache:
+            return cache[key]
+        count = None
+        # 1) seller profile API
+        if uid:
+            try:
+                r = self.s.get(f"https://{DOMAIN}/api/v2/users/{uid}",
+                               headers=self.api_headers(), timeout=20)
+                if r.status_code == 200:
+                    d = r.json()
+                    d = d.get("user", d)
+                    for k in ("feedback_count", "reviews_count"):
+                        if isinstance(d.get(k), int):
+                            count = d[k]
+                            break
+            except Exception:
+                pass
+        # 2) the listing / profile web page (seller info is embedded in it)
+        pages = [item.get("url")] + ([f"https://{DOMAIN}/member/{uid}"] if uid else [])
+        for page in pages:
+            if count is not None or not page:
+                break
+            try:
+                r = self.s.get(page, headers={"Accept": "text/html"}, timeout=20)
+                if r.status_code == 200:
+                    for rx in self.REVIEW_RES:
+                        m = rx.search(r.text)
+                        if m:
+                            count = int(m.group(1))
+                            break
+            except Exception:
+                pass
+        cache[key] = count
+        return count
 
     def used(self, how):
         if not self.method_logged:
@@ -386,14 +440,54 @@ def skip_reason(item, excl, min_price, require=()):
 # ---------- seen-items memory ----------
 
 def load_seen():
+    """seen.json holds the listing ids already handled and which searches are primed."""
     try:
-        return set(json.loads(SEEN_FILE.read_text()))
+        d = json.loads(SEEN_FILE.read_text())
     except Exception:
-        return set()
+        return set(), set()
+    if isinstance(d, list):                      # older format: just ids
+        return set(map(str, d)), set()
+    return set(map(str, d.get("ids", []))), set(d.get("primed", []))
 
 
-def save_seen(seen):
-    SEEN_FILE.write_text(json.dumps(list(seen)[-5000:]))
+def save_seen(seen, primed):
+    SEEN_FILE.write_text(json.dumps({"ids": list(seen)[-8000:], "primed": sorted(primed)}))
+
+
+# ---------- iPhone model detection ----------
+
+MODEL_RE = re.compile(r"i\s*phone\s*(1[0-9])\s*(pro\s*max|pro|plus|mini|max|\+)?", re.I)
+
+
+def model_of(title):
+    """'Apple iPhone 15 Pro Max 256GB' -> 'iPhone 15 Pro Max'"""
+    t = re.sub(r"promax", "pro max", title or "", flags=re.I)
+    m = MODEL_RE.search(t)
+    if not m:
+        return None
+    variant = re.sub(r"\s+", " ", (m.group(2) or "").lower()).strip()
+    variant = {"max": "pro max", "+": "plus"}.get(variant, variant)
+    return " ".join(["iPhone", m.group(1)] + ([variant.title()] if variant else []))
+
+
+def build_searches():
+    """One Vinted search per iPhone generation; each listing is then matched to
+    the exact model and checked against that model's own price range."""
+    models = {m["name"].strip(): (float(m["min"]), float(m["max"])) for m in CONFIG["models"]}
+    groups = {}
+    for name, (lo, hi) in models.items():
+        gen = re.search(r"\d+", name).group()
+        g = groups.setdefault(gen, [lo, hi])
+        g[0], g[1] = min(g[0], lo), max(g[1], hi)
+    searches = []
+    for gen, (lo, hi) in sorted(groups.items()):
+        # Loose limits sent to Vinted (works whether it reads them as £ or $);
+        # the exact £ range per model is checked afterwards.
+        params = {"search_text": f"iphone {gen}", "order": "newest_first",
+                  "price_from": int(lo * 0.75), "price_to": int(hi * 1.35 + 1),
+                  "per_page": CONFIG.get("per_page", 96), "page": 1}
+        searches.append((f"iPhone {gen}", params))
+    return models, searches
 
 
 # ---------- main loop ----------
@@ -401,38 +495,30 @@ def save_seen(seen):
 def main():
     if "--test" in sys.argv:
         notify("Test", {"id": 0, "title": "iPhone 14 Pro 128GB (test)",
-                        "price": {"amount": "299.00", "currency_code": "GBP"},
+                        "price": {"amount": "199.00", "currency_code": "GBP"},
                         "url": f"https://{DOMAIN}/", "status": "Very good"})
         log("Test notification sent - check your phone.")
         return
 
-    global_excl = [w.lower() for w in CONFIG.get("exclude_words", [])]
-    searches = [(s["name"], url_to_params(s["url"]),
-                 global_excl + [w.lower() for w in s.get("exclude_words", [])])
-                for s in CONFIG["searches"]]
-    require_words = {s["name"]: [w.lower() for w in s.get("require_words", [])]
-                     for s in CONFIG["searches"]}
+    excl = [w.lower() for w in CONFIG.get("exclude_words", [])]
+    models, searches = build_searches()
+    min_reviews = int(CONFIG.get("min_seller_reviews", 0) or 0)
+    alert_if_unknown = CONFIG.get("alert_if_reviews_unknown", True)
     delay = CONFIG.get("poll_seconds", 60)
-    max_age = CONFIG.get("max_age_minutes")
-    notify_on_start = CONFIG.get("notify_on_start", False)
-    min_price = float(CONFIG.get("min_price", 0) or 0)
 
-    # --minutes N : stop after N minutes (used by the GitHub schedule)
     end_time = None
     if "--minutes" in sys.argv:
         end_time = time.time() + float(sys.argv[sys.argv.index("--minutes") + 1]) * 60
 
-    seen = load_seen()
-    save_seen(seen)  # make sure the file always exists (so GitHub can save it)
-    # First ever run only records existing items. If we already have history
-    # (e.g. restored on GitHub), alert straight away.
-    primed = {n for n, _, _ in searches} if seen else set()
+    seen, primed = load_seen()
+    save_seen(seen, primed)  # make sure the file always exists (so GitHub can save it)
     backoff = 0
     v = Vinted()
-    log(f"Watching {len(searches)} search(es) every ~{delay}s")
+    log(f"Watching {len(models)} models in {len(searches)} searches every ~{delay}s; "
+        f"seller must have >= {min_reviews} review(s)")
 
     while end_time is None or time.time() < end_time:
-        for name, params, excl in searches:
+        for name, params in searches:
             try:
                 items = v.search(params)
             except RateLimited:
@@ -445,26 +531,50 @@ def main():
                 continue
             backoff = 0
 
-            new = [i for i in items if i.get("id") not in seen]
+            new = [i for i in items if i["id"] not in seen]
+            if name in primed and new:
+                log(f"'{name}': {len(items)} fetched, {len(new)} new")
             for item in reversed(new):  # oldest first
                 seen.add(item["id"])
-                if name not in primed and not notify_on_start:
+                if name not in primed:
+                    continue                      # first look: just remember what exists
+                title = item.get("title") or ""
+                model = model_of(title)
+                if model not in models:
+                    log(f"skip (model {model or '?'} not on list): {title}")
                     continue
-                reason = skip_reason(item, excl, min_price, require_words.get(name, ()))
+                lo, hi = models[model]
+                gbp = gbp_of(item)
+                if gbp is not None and not (lo <= gbp <= hi):
+                    log(f"skip ({model} {price_of(item)} outside £{lo:g}-£{hi:g}): {title}")
+                    continue
+                reason = skip_reason(item, excl, 0)
                 if reason:
-                    log(f"skip ({reason}): {item.get('title')} - {price_of(item)}")
+                    log(f"skip ({reason}): {title} - {price_of(item)}")
                     continue
-                age = age_minutes(item)
-                if max_age and age is not None and age > max_age:
-                    continue  # an old listing that was just bumped
-                log(f"NEW [{name}] {item.get('title')} - {price_of(item)}")
-                notify(name, item)
+                note = ""
+                if min_reviews:
+                    reviews = v.seller_reviews(item)
+                    if reviews is None:
+                        if not alert_if_unknown:
+                            log(f"skip (seller reviews unknown): {title}")
+                            continue
+                        note = "⚠️ seller reviews not checked"
+                    elif reviews < min_reviews:
+                        log(f"skip (seller has {reviews} reviews): {title} - {price_of(item)}")
+                        continue
+                    else:
+                        note = f"⭐ seller has {reviews} review{'s' if reviews != 1 else ''}"
+                if note:
+                    item["status"] = " · ".join(x for x in (item.get("status"), note) if x)
+                log(f"NEW [{model}] {title} - {price_of(item)} {note}")
+                notify(model, item)
 
             if name not in primed:
                 log(f"'{name}': recorded {len(items)} existing listings")
-            primed.add(name)
-            save_seen(seen)
-            time.sleep(random.uniform(2, 5))
+                primed.add(name)
+            save_seen(seen, primed)
+            time.sleep(random.uniform(2, 4))
 
         pause = delay + random.uniform(0, delay * 0.3)
         if end_time and time.time() + pause >= end_time:
