@@ -15,7 +15,7 @@ if not defined PY python --version >nul 2>&1 && set "PY=python"
 if defined PY goto have_python
 
 echo [1/5] Python is not installed - installing it now (this can take a few minutes)...
-winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
+winget install -e --id Python.Python.3.12 --source winget --scope user --accept-package-agreements --accept-source-agreements
 if errorlevel 1 goto python_manual
 echo.
 echo Python is installed. CLOSE this window and double-click setup.bat again.
