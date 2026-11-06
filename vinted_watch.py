@@ -271,17 +271,41 @@ class Vinted:
 
 # ---------- item helpers ----------
 
-def price_of(item):
+# Vinted shows prices in the server's local currency (GitHub's servers are in
+# the US, so USD). Approximate rates to turn them back into pounds.
+TO_GBP = {"GBP": 1.0, "USD": CONFIG.get("usd_to_gbp", 0.77), "EUR": CONFIG.get("eur_to_gbp", 0.86)}
+
+
+def raw_price(item):
     p = item.get("price")
     if isinstance(p, dict):
         amount = p.get("amount") or p.get("value")
         cur = p.get("currency_code") or p.get("currency") or ""
     else:
         amount, cur = p, item.get("currency") or ""
+    try:
+        amount = float(str(amount).replace(",", "."))
+    except (TypeError, ValueError):
+        amount = None
+    return amount, (cur or "GBP").upper()
+
+
+def gbp_of(item):
+    amount, cur = raw_price(item)
+    if amount is None or cur not in TO_GBP:
+        return amount
+    return amount * TO_GBP[cur]
+
+
+def price_of(item):
+    amount, cur = raw_price(item)
     if amount is None:
         return "price n/a"
-    cur = {"GBP": "£", "EUR": "€"}.get(cur, cur)
-    return f"{cur}{amount}" if cur in ("£", "€") else f"{amount} {cur}".strip()
+    if cur == "GBP":
+        return f"£{amount:g}" if amount == int(amount) else f"£{amount:.2f}"
+    gbp = gbp_of(item)
+    sym = {"USD": "$", "EUR": "€"}.get(cur, cur + " ")
+    return f"≈£{gbp:.0f} ({sym}{amount:g})"
 
 
 def age_minutes(item):
@@ -311,7 +335,13 @@ def notify(search_name, item):
         if photo:
             payload["attach"] = photo
         try:
-            http.post("https://ntfy.sh/", json=payload, timeout=15)
+            r = http.post("https://ntfy.sh/", json=payload, timeout=15)
+            if r.status_code != 200:
+                log(f"ntfy refused ({r.status_code}): {r.text[:150]!r}")
+                if "attach" in payload:          # retry without the photo
+                    payload.pop("attach")
+                    r = http.post("https://ntfy.sh/", json=payload, timeout=15)
+                    log(f"ntfy retry without photo: {r.status_code}")
         except Exception as e:
             log(f"ntfy failed: {e}")
 
@@ -335,22 +365,14 @@ def notify(search_name, item):
 # ---------- accessory filter ----------
 
 # "128GB", "256 gb", "1TB" -> almost always a real device, not an accessory
-STORAGE_RE = re.compile(r"\b\d{2,4}\s?(gb|tb)\b", re.I)
+STORAGE_RE = re.compile(r"(?<!\d)\d{2,4}\s?(gb|tb)", re.I)   # also matches "Gen256GBWiFi"
 
 
-def amount_of(item):
-    p = item.get("price")
-    if isinstance(p, dict):
-        p = p.get("amount") or p.get("value")
-    try:
-        return float(str(p).replace(",", "."))
-    except (TypeError, ValueError):
-        return None
-
-
-def skip_reason(item, excl, min_price):
+def skip_reason(item, excl, min_price, require=()):
     title = (item.get("title") or "").lower()
-    amount = amount_of(item)
+    if require and not any(w in title for w in require):
+        return f"title doesn't mention {'/'.join(require)}"
+    amount = gbp_of(item)
     if min_price and amount is not None and amount < min_price:
         return f"under £{min_price:g}"
     for w in excl:
@@ -388,6 +410,8 @@ def main():
     searches = [(s["name"], url_to_params(s["url"]),
                  global_excl + [w.lower() for w in s.get("exclude_words", [])])
                 for s in CONFIG["searches"]]
+    require_words = {s["name"]: [w.lower() for w in s.get("require_words", [])]
+                     for s in CONFIG["searches"]}
     delay = CONFIG.get("poll_seconds", 60)
     max_age = CONFIG.get("max_age_minutes")
     notify_on_start = CONFIG.get("notify_on_start", False)
@@ -426,7 +450,7 @@ def main():
                 seen.add(item["id"])
                 if name not in primed and not notify_on_start:
                     continue
-                reason = skip_reason(item, excl, min_price)
+                reason = skip_reason(item, excl, min_price, require_words.get(name, ()))
                 if reason:
                     log(f"skip ({reason}): {item.get('title')} - {price_of(item)}")
                     continue
