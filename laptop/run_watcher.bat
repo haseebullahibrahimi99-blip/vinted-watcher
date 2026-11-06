@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if not exist vinted_watch.py if exist ..\vinted_watch.py cd ..
 title Vinted Watcher (keep this window open - minimise it)
 set "PYTHONIOENCODING=utf-8"
 set "PY=py -3"

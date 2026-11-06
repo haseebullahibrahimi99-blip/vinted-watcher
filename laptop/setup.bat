@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if not exist vinted_watch.py if exist ..\vinted_watch.py cd ..
 title Vinted Watcher - setup
 echo ==========================================
 echo   Vinted Watcher - one-time laptop setup
