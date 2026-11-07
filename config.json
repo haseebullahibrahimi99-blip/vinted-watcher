@@ -1,6 +1,6 @@
 {
   "domain": "www.vinted.co.uk",
-  "seconds_between_checks": 3,
+  "seconds_between_checks": 2,
   "per_page": 48,
   "min_seller_reviews": 1,
   "alert_if_reviews_unknown": true,

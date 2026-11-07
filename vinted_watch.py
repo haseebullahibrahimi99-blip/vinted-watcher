@@ -519,7 +519,7 @@ def main():
     alert_if_unknown = CONFIG.get("alert_if_reviews_unknown", True)
     # One Vinted request every `seconds_between_checks` seconds, taking turns
     # through the searches (4 searches x 3s = each model checked every ~12s).
-    base_gap = float(CONFIG.get("seconds_between_checks", 3))
+    base_gap = float(CONFIG.get("seconds_between_checks", 2))
     gap = base_gap
     calm_since = time.time()
 
