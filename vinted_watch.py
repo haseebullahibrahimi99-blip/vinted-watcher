@@ -476,6 +476,9 @@ LAPTOP_SPLIT = {
     "E": ["iPhone 14"],
     "I": ["iPhone 15"],
 }
+# Seconds between checks per laptop (H covers two searches, so it checks
+# twice as often to keep each model at ~2s)
+LAPTOP_GAP = {"H": 1}
 
 
 def build_searches():
@@ -528,8 +531,10 @@ def main():
             k, n = int(m.group(1)), int(m.group(2))
             picked = searches[k - 1::n]
             label = f"laptop {k} of {n}"
+    gap_override = None
     if picked:
         searches = picked
+        gap_override = (CONFIG.get("laptop_gaps") or LAPTOP_GAP).get(share.upper())
         log(f"This is the {label}: watching {', '.join(nm for nm, _ in searches)}")
         models = {name: rng for name, rng in models.items()
                   if any(name.startswith(nm) for nm, _ in searches)}
@@ -537,7 +542,7 @@ def main():
     alert_if_unknown = CONFIG.get("alert_if_reviews_unknown", True)
     # One Vinted request every `seconds_between_checks` seconds, taking turns
     # through the searches (4 searches x 3s = each model checked every ~12s).
-    base_gap = float(CONFIG.get("seconds_between_checks", 2))
+    base_gap = float(gap_override or CONFIG.get("seconds_between_checks", 2))
     gap = base_gap
     calm_since = time.time()
 
