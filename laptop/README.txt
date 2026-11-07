@@ -16,9 +16,14 @@ DAILY USE
 - stop_watcher.bat -> stop it
 - run_watcher.bat -> start it again without restarting
 
-TWO LAPTOPS (home + shop)
-- Set up both laptops the same way, then double-click set_laptop_number.bat
-  on each: home = 1 of 2, shop = 2 of 2. Each then watches half the models.
+THREE LAPTOPS (H = home, E and I = shops)
+- Set up each laptop the same way (setup.bat), then double-click ONE of:
+    this_is_H_laptop.bat  -> watches iPhone 13 and 16
+    this_is_E_laptop.bat  -> watches iPhone 14
+    this_is_I_laptop.bat  -> watches iPhone 15
+- Each laptop must be on its OWN internet connection.
+- If the other laptops are off for a while, double-click watch_everything.bat
+  on the one that is on.
 
 CHANGING MODELS / PRICES
 - Open config.json in Notepad, edit the "models" list, save,

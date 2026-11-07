@@ -1,0 +1,13 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+if not exist vinted_watch.py if exist ..\vinted_watch.py cd ..
+title Vinted Watcher - H laptop
+> share.txt echo H
+echo This is now the H laptop. It watches: iPhone 13 and iPhone 16.
+echo.
+echo Restarting the watcher...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'vinted_watch\.py|run_watcher\.bat' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+start "" /min "%~dp0run_watcher.bat"
+echo Done. You'll get "Vinted watcher started (H laptop)" on your phone in about 30 seconds.
+pause

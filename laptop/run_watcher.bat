@@ -13,7 +13,10 @@ timeout /t 20 /nobreak >nul
 
 set "TOPIC="
 for /f "usebackq delims=" %%T in (`%PY% -c "import json;print(json.load(open('config.json',encoding='utf-8')).get('ntfy_topic',''))"`) do set "TOPIC=%%T"
-if defined TOPIC curl -s -H "Title: Vinted watcher started" -H "Tags: white_check_mark" -d "Watching Vinted UK from your laptop." "https://ntfy.sh/%TOPIC%" >nul 2>&1
+set "WHO=laptop"
+if exist share.txt set /p WHO=<share.txt
+if exist share.txt set "WHO=%WHO: =% laptop"
+if defined TOPIC curl -s -H "Title: Vinted watcher started (%WHO%)" -H "Tags: white_check_mark" -d "Watching Vinted UK from the %WHO%." "https://ntfy.sh/%TOPIC%" >nul 2>&1
 
 :loop
 rem Keep the log from growing forever

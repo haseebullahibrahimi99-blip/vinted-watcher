@@ -470,6 +470,14 @@ def model_of(title):
     return " ".join(["iPhone", m.group(1)] + ([variant.title()] if variant else []))
 
 
+# Which iPhone generations each named laptop watches (H = home, E and I = shops)
+LAPTOP_SPLIT = {
+    "H": ["iPhone 13", "iPhone 16"],
+    "E": ["iPhone 14"],
+    "I": ["iPhone 15"],
+}
+
+
 def build_searches():
     """One Vinted search per iPhone generation; each listing is then matched to
     the exact model and checked against that model's own price range."""
@@ -502,17 +510,27 @@ def main():
 
     excl = [w.lower() for w in CONFIG.get("exclude_words", [])]
     models, searches = build_searches()
-    # Sharing the work between several laptops: share.txt (or "share" in
-    # config.json) holds e.g. "1/2" = this is laptop 1 of 2.
+    # Sharing the work between laptops on different internet connections.
+    # share.txt holds the laptop's name (H, E or I) - or e.g. "1/2".
     share = str(CONFIG.get("share") or "").strip()
     share_file = BASE / "share.txt"
     if not share and share_file.exists():
         share = share_file.read_text(encoding="utf-8").strip()
-    m = re.fullmatch(r"(\d+)\s*/\s*(\d+)", share)
-    if m and 1 <= int(m.group(1)) <= int(m.group(2)) > 1:
-        k, n = int(m.group(1)), int(m.group(2))
-        searches = searches[k - 1::n]
-        log(f"This is laptop {k} of {n}: watching {', '.join(nm for nm, _ in searches)}")
+    split = CONFIG.get("laptops") or LAPTOP_SPLIT
+    picked = None
+    if share.upper() in split:
+        wanted = split[share.upper()]
+        picked = [x for x in searches if x[0] in wanted]
+        label = f"{share.upper()} laptop"
+    else:
+        m = re.fullmatch(r"(\d+)\s*/\s*(\d+)", share)
+        if m and 1 <= int(m.group(1)) <= int(m.group(2)) > 1:
+            k, n = int(m.group(1)), int(m.group(2))
+            picked = searches[k - 1::n]
+            label = f"laptop {k} of {n}"
+    if picked:
+        searches = picked
+        log(f"This is the {label}: watching {', '.join(nm for nm, _ in searches)}")
         models = {name: rng for name, rng in models.items()
                   if any(name.startswith(nm) for nm, _ in searches)}
     min_reviews = int(CONFIG.get("min_seller_reviews", 0) or 0)
