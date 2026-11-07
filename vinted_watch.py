@@ -504,7 +504,11 @@ def main():
     models, searches = build_searches()
     min_reviews = int(CONFIG.get("min_seller_reviews", 0) or 0)
     alert_if_unknown = CONFIG.get("alert_if_reviews_unknown", True)
-    delay = CONFIG.get("poll_seconds", 60)
+    # One Vinted request every `seconds_between_checks` seconds, taking turns
+    # through the searches (4 searches x 3s = each model checked every ~12s).
+    base_gap = float(CONFIG.get("seconds_between_checks", 3))
+    gap = base_gap
+    calm_since = time.time()
 
     end_time = None
     if "--minutes" in sys.argv:
@@ -514,72 +518,84 @@ def main():
     save_seen(seen, primed)  # make sure the file always exists (so GitHub can save it)
     backoff = 0
     v = Vinted()
-    log(f"Watching {len(models)} models in {len(searches)} searches every ~{delay}s; "
+    log(f"Watching {len(models)} models in {len(searches)} searches; one check every "
+        f"~{base_gap:g}s (each model every ~{base_gap * len(searches):g}s); "
         f"seller must have >= {min_reviews} review(s)")
 
+    turn = 0
     while end_time is None or time.time() < end_time:
-        for name, params in searches:
-            try:
-                items = v.search(params)
-            except RateLimited:
-                backoff = min(backoff * 2 or 120, 900)
-                log(f"Rate limited by Vinted, pausing {backoff}s")
-                time.sleep(backoff)
-                continue
-            except Exception as e:
-                log(f"Error on '{name}': {e}")
-                continue
-            backoff = 0
+        name, params = searches[turn % len(searches)]
+        turn += 1
+        started = time.time()
+        try:
+            items = v.search(params)
+        except RateLimited:
+            backoff = min(backoff * 2 or 60, 900)
+            gap = min(gap * 2, 60)
+            calm_since = time.time()
+            log(f"Rate limited by Vinted - pausing {backoff}s, then checking every {gap:g}s")
+            time.sleep(backoff)
+            continue
+        except Exception as e:
+            log(f"Error on '{name}': {e}")
+            time.sleep(max(gap, 10))
+            continue
+        backoff = 0
+        # after 10 calm minutes, creep back towards full speed
+        if gap > base_gap and time.time() - calm_since > 600:
+            gap = max(base_gap, gap / 2)
+            calm_since = time.time()
+            log(f"Speeding back up: one check every {gap:g}s")
 
-            new = [i for i in items if i["id"] not in seen]
-            if name in primed and new:
-                log(f"'{name}': {len(items)} fetched, {len(new)} new")
-            for item in reversed(new):  # oldest first
-                seen.add(item["id"])
-                if name not in primed:
-                    continue                      # first look: just remember what exists
-                title = item.get("title") or ""
-                model = model_of(title)
-                if model not in models:
-                    log(f"skip (model {model or '?'} not on list): {title}")
-                    continue
-                lo, hi = models[model]
-                gbp = gbp_of(item)
-                if gbp is not None and not (lo <= gbp <= hi):
-                    log(f"skip ({model} {price_of(item)} outside £{lo:g}-£{hi:g}): {title}")
-                    continue
-                reason = skip_reason(item, excl, 0)
-                if reason:
-                    log(f"skip ({reason}): {title} - {price_of(item)}")
-                    continue
-                note = ""
-                if min_reviews:
-                    reviews = v.seller_reviews(item)
-                    if reviews is None:
-                        if not alert_if_unknown:
-                            log(f"skip (seller reviews unknown): {title}")
-                            continue
-                        note = "⚠️ seller reviews not checked"
-                    elif reviews < min_reviews:
-                        log(f"skip (seller has {reviews} reviews): {title} - {price_of(item)}")
-                        continue
-                    else:
-                        note = f"⭐ seller has {reviews} review{'s' if reviews != 1 else ''}"
-                if note:
-                    item["status"] = " · ".join(x for x in (item.get("status"), note) if x)
-                log(f"NEW [{model}] {title} - {price_of(item)} {note}")
-                notify(model, item)
-
+        new = [i for i in items if i["id"] not in seen]
+        if name in primed and new:
+            log(f"'{name}': {len(items)} fetched, {len(new)} new")
+        for item in reversed(new):  # oldest first
+            seen.add(item["id"])
             if name not in primed:
-                log(f"'{name}': recorded {len(items)} existing listings")
-                primed.add(name)
-            save_seen(seen, primed)
-            time.sleep(random.uniform(2, 4))
+                continue                      # first look: just remember what exists
+            title = item.get("title") or ""
+            model = model_of(title)
+            if model not in models:
+                log(f"skip (model {model or '?'} not on list): {title}")
+                continue
+            lo, hi = models[model]
+            gbp = gbp_of(item)
+            if gbp is not None and not (lo <= gbp <= hi):
+                log(f"skip ({model} {price_of(item)} outside £{lo:g}-£{hi:g}): {title}")
+                continue
+            reason = skip_reason(item, excl, 0)
+            if reason:
+                log(f"skip ({reason}): {title} - {price_of(item)}")
+                continue
+            note = ""
+            if min_reviews:
+                reviews = v.seller_reviews(item)
+                if reviews is None:
+                    if not alert_if_unknown:
+                        log(f"skip (seller reviews unknown): {title}")
+                        continue
+                    note = "⚠️ seller reviews not checked"
+                elif reviews < min_reviews:
+                    log(f"skip (seller has {reviews} reviews): {title} - {price_of(item)}")
+                    continue
+                else:
+                    note = f"⭐ seller has {reviews} review{'s' if reviews != 1 else ''}"
+            if note:
+                item["status"] = " · ".join(x for x in (item.get("status"), note) if x)
+            log(f"NEW [{model}] {title} - {price_of(item)} {note}")
+            notify(model, item)
 
-        pause = delay + random.uniform(0, delay * 0.3)
-        if end_time and time.time() + pause >= end_time:
-            break
-        time.sleep(pause)
+        if name not in primed:
+            log(f"'{name}': recorded {len(items)} existing listings")
+            primed.add(name)
+        save_seen(seen, primed)
+        # wait so that checks are ~gap seconds apart (with a little randomness)
+        wait = gap * random.uniform(0.8, 1.3) - (time.time() - started)
+        if wait > 0:
+            if end_time and time.time() + wait >= end_time:
+                break
+            time.sleep(wait)
     log("Run finished.")
 
 
